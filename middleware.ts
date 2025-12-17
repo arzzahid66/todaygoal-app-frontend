@@ -2,9 +2,16 @@ import { NextResponse, type NextRequest } from "next/server"
 import { createServerClient } from "@supabase/ssr"
 
 export async function middleware(request: NextRequest) {
+  // If env vars aren't configured (common in fresh Vercel projects), don't break the whole site.
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
+  const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+  if (!supabaseUrl || !supabaseAnonKey) {
+    return NextResponse.next({ request })
+  }
+
   const response = NextResponse.next({ request })
 
-  const supabase = createServerClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!, {
+  const supabase = createServerClient(supabaseUrl, supabaseAnonKey, {
     cookies: {
       getAll() {
         return request.cookies.getAll()
@@ -18,10 +25,18 @@ export async function middleware(request: NextRequest) {
   })
 
   // Refresh session if expired - required for Server Components.
-  const {
-    data: { session },
-  } = await supabase.auth.getSession()
-  const user = session?.user ?? null
+  let user: unknown = null
+  try {
+    // Vercel runs a separate TS check for middleware; the Supabase auth type may not expose these methods
+    // even though they exist at runtime. Use a narrow escape hatch here.
+    const auth = supabase.auth as unknown as {
+      getSession: () => Promise<{ data?: { session?: { user?: unknown } } }>
+    }
+    const { data } = await auth.getSession()
+    user = data?.session?.user ?? null
+  } catch {
+    user = null
+  }
 
   const pathname = request.nextUrl.pathname
   const isAuthPage = pathname.startsWith("/login") || pathname.startsWith("/signup")
